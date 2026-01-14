@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CyberMessenger Native WebRTC</title>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+    
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    
+    <style>
+        :root {
+            --neon-blue: #00f3ff;
+            --neon-yellow: #ffe600;
+            --neon-red: #ff003c;
+            --neon-green: #00ff41;
+            --bg-dark: #050505;
+            --glass-bg: rgba(10, 10, 10, 0.9);
+        }
+
+        * { box-sizing: border-box; outline: none; -webkit-tap-highlight-color: transparent; }
+
+        body, html {
+            margin: 0; padding: 0;
+            font-family: 'Rajdhani', sans-serif;
+            background-color: var(--bg-dark);
+            color: white;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* --- CYBER BACKGROUND --- */
+        body::before {
+            content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle at center, #111 0%, #000 100%); z-index: -2;
+        }
+        .grid-lines {
+            position: absolute; width: 100%; height: 100%; top: 0; left: 0;
+            background-image: linear-gradient(rgba(0, 243, 255, 0.05) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(0, 243, 255, 0.05) 1px, transparent 1px);
+            background-size: 50px 50px; z-index: -1; pointer-events: none;
+        }
+
+        /* --- UI COMPONENTS --- */
+        .glass-panel {
+            background: var(--glass-bg); backdrop-filter: blur(10px);
+            border: 1px solid rgba(0, 243, 255, 0.2); border-radius: 15px;
+        }
+        .btn-primary {
+            background: linear-gradient(90deg, var(--neon-blue), #0077ff); border: none; padding: 12px;
+            width: 100%; color: black; font-family: 'Orbitron'; font-weight: bold; cursor: pointer;
+            clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+        }
+        input {
+            width: 100%; background: rgba(255,255,255,0.1); border: 1px solid #333;
+            padding: 12px; color: white; margin-bottom: 10px; font-family: 'Rajdhani';
+        }
+
+        /* --- SCREENS --- */
+        #auth-screen, #main-app, #call-interface { width: 100%; height: 100%; position: relative; }
+        #auth-screen { display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 20px; z-index: 10; }
+        #main-app { display: none; flex-direction: column; z-index: 5; }
+        
+        /* --- CHAT UI --- */
+        .header { padding: 15px; border-bottom: 1px solid #333; background: rgba(0,0,0,0.8); display: flex; justify-content: space-between; align-items: center; }
+        .chat-list { flex: 1; overflow-y: auto; padding: 10px; }
+        .chat-item { 
+            display: flex; align-items: center; padding: 15px; margin-bottom: 10px; 
+            background: rgba(255,255,255,0.05); border-left: 2px solid var(--neon-blue); cursor: pointer; 
+        }
+        .avatar { width: 50px; height: 50px; border-radius: 50%; border: 2px solid var(--neon-blue); object-fit: cover; margin-right: 15px; }
+
+        /* --- NATIVE CALL UI (WEBRTC) --- */
+        #call-interface { 
+            display: none; position: fixed; top: 0; left: 0; z-index: 5000; 
+            background: black; flex-direction: column;
+        }
+        
+        /* Video Elements */
+        #remote-video {
+            width: 100%; height: 100%; object-fit: cover;
+            position: absolute; top: 0; left: 0; z-index: 1;
+        }
+        #local-video {
+            width: 100px; height: 140px; object-fit: cover;
+            position: absolute; top: 20px; right: 20px; z-index: 2;
+            border: 2px solid var(--neon-blue); border-radius: 10px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.8);
+            background: #000;
+        }
+
+        .hud-overlay {
+            position: absolute; bottom: 30px; left: 0; width: 100%; z-index: 10;
+            display: flex; justify-content: center; gap: 30px;
+        }
+        .hud-btn {
+            width: 60px; height: 60px; border-radius: 50%; border: none;
+            color: white; font-size: 24px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        .btn-hangup { background: var(--neon-red); }
+        .btn-mute { background: #333; border: 1px solid #555; }
+
+        /* --- INCOMING / OUTGOING MODAL --- */
+        #call-modal {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.95); z-index: 6000;
+            flex-direction: column; justify-content: center; align-items: center; text-align: center;
+        }
+        .caller-pic-large {
+            width: 120px; height: 120px; border-radius: 50%; border: 4px solid var(--neon-blue);
+            margin-bottom: 20px; animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(0, 243, 255, 0.4); } 70% { box-shadow: 0 0 0 20px rgba(0, 243, 255, 0); } 100% { box-shadow: 0 0 0 0 rgba(0, 243, 255, 0); } }
+
+        /* --- MESSAGING --- */
+        #chat-window { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: black; z-index: 100; flex-direction: column; }
+        .msg-area { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 10px; }
+        .msg { padding: 10px 15px; border-radius: 15px; max-width: 75%; color: white; }
+        .sent { background: linear-gradient(135deg, var(--neon-blue), #0056b3); align-self: flex-end; }
+        .received { background: #222; border: 1px solid #444; align-self: flex-start; }
+    </style>
+</head>
+<body>
+
+    <div class="grid-lines"></div>
+
+    <div id="call-interface">
+        <video id="remote-video" autoplay playsinline></video>
+        <video id="local-video" autoplay playsinline muted></video> <div style="position:absolute; top:20px; left:20px; z-index:10; font-family:'Orbitron'; color:var(--neon-blue);">
+            <span id="call-timer">00:00</span>
+            <div style="font-size:10px; color:var(--neon-green);">● LIVE FEED</div>
+        </div>
+
+        <div class="hud-overlay">
+            <button class="hud-btn btn-mute" onclick="toggleMute()">🎤</button>
+            <button class="hud-btn btn-hangup" onclick="endCall()">✖</button>
+        </div>
+    </div>
+
+    <div id="call-modal">
+        <img src="" id="call-modal-pic" class="caller-pic-large">
+        <h2 id="call-modal-name" style="color:white; font-size:28px; font-family:'Rajdhani'; margin:0;">Target</h2>
+        <h3 id="call-modal-status" style="color:#aaa; font-weight:normal; margin-bottom: 30px;">Connecting...</h3>
+        
+        <div id="incoming-actions" style="display:none; gap:30px;">
+            <button class="hud-btn btn-hangup" onclick="rejectCall()">✖</button>
+            <button class="hud-btn" style="background:var(--neon-green);" onclick="answerCall()">📞</button>
+        </div>
+        
+        <div id="outgoing-actions" style="display:none;">
+            <button class="hud-btn btn-hangup" onclick="cancelCall()">✖</button>
+        </div>
+    </div>
+
+    <div id="auth-screen">
+        <h1 style="color:var(--neon-blue); font-size: 40px; font-family:'Orbitron';">CYBER<span style="color:var(--neon-yellow)">MSG</span></h1>
+        <div class="glass-panel" style="padding:30px; width:100%; max-width:350px; text-align:center;">
+            <input type="text" id="log-key" placeholder="Access Key">
+            <input type="password" id="log-pass" placeholder="Password">
+            <button class="btn-primary" onclick="login()">INITIALIZE SYSTEM</button>
+            <p style="margin-top:15px; color:var(--neon-yellow); cursor:pointer;" onclick="toggleReg()">[ Create New ID ]</p>
+        </div>
+        
+        <div id="reg-box" class="glass-panel" style="padding:30px; width:100%; max-width:350px; text-align:center; display:none; margin-top:20px;">
+            <input type="text" id="reg-name" placeholder="Codename">
+            <input type="text" id="reg-key" placeholder="New Key">
+            <input type="password" id="reg-pass" placeholder="New Password">
+            <button class="btn-primary" onclick="signup()">REGISTER</button>
+        </div>
+    </div>
+
+    <div id="main-app">
+        <div class="header">
+            <h2 style="margin:0; font-family:'Orbitron';">CHATS <span style="color:var(--neon-blue); font-size:12px;">/// V.WEBRTC</span></h2>
+            <div style="width:40px; height:40px; border-radius:50%; background:#333; overflow:hidden;">
+                <img id="my-pic-thumb" style="width:100%; height:100%; object-fit:cover;">
+            </div>
+        </div>
+        
+        <div class="chat-list" id="chat-list"></div>
+    </div>
+
+    <div id="chat-window">
+        <div class="header" style="background:rgba(0,0,0,0.95);">
+            <div style="display:flex; align-items:center;">
+                <span style="font-size:24px; margin-right:15px; cursor:pointer;" onclick="closeChat()">⬅</span>
+                <img id="chat-peer-pic" class="avatar">
+                <b id="chat-peer-name" style="font-size:18px;">User</b>
+            </div>
+            <div style="display:flex; gap:15px;">
+                <span style="font-size:24px; cursor:pointer;" onclick="initiateCall('video')">📹</span>
+            </div>
+        </div>
+        <div class="msg-area" id="msg-display"></div>
+        <div style="padding:15px; border-top:1px solid #333; display:flex; gap:10px;">
+            <input type="text" id="msg-input" placeholder="Type data..." style="margin:0; border-radius:20px;">
+            <button class="btn-primary" style="width:50px; border-radius:50%; padding:0; display:flex; justify-content:center; align-items:center;" onclick="sendMsg()">➤</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getFirestore, doc, setDoc, getDoc, updateDoc, deleteDoc, collection, query, where, getDocs, addDoc, onSnapshot, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyC-ZdYnW7L0islQMTXaaClIFLT87aLXtaA",
+            authDomain: "arafat-16c6b.firebaseapp.com",
+            projectId: "arafat-16c6b",
+            storageBucket: "arafat-16c6b.firebasestorage.app",
+            messagingSenderId: "1055976706280",
+            appId: "1:1055976706280:web:c14cd47c399356456fb95d"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // --- AUDIO ENGINE ---
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let ringInterval = null;
+        
+        document.body.addEventListener('click', () => { if(audioCtx.state === 'suspended') audioCtx.resume(); }, {once:true});
+
+        function playSound(type) {
+            if(audioCtx.state === 'suspended') audioCtx.resume();
+            
+            if(type === 'ring') {
+                if(ringInterval) return;
+                const beep = () => {
+                    const o = audioCtx.createOscillator();
+                    const g = audioCtx.createGain();
+                    o.connect(g); g.connect(audioCtx.destination);
+                    o.frequency.setValueAtTime(400, audioCtx.currentTime);
+                    o.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.5);
+                    g.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                    g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.8);
+                    o.start(); o.stop(audioCtx.currentTime + 0.8);
+                };
+                beep();
+                ringInterval = setInterval(beep, 1500);
+            } else if(type === 'stop') {
+                if(ringInterval) { clearInterval(ringInterval); ringInterval = null; }
+            }
+        }
+
+        let myUser = null;
+        let activePeer = null;
+        let peer = null; // PeerJS instance
+        let currentCall = null;
+        let localStream = null;
+        let incomingCallMetadata = null;
+
+        // --- AUTH ---
+        window.toggleReg = () => {
+            const box = document.getElementById('reg-box');
+            box.style.display = box.style.display === 'none' ? 'block' : 'none';
+        };
+
+        window.signup = async () => {
+            const name = document.getElementById('reg-name').value;
+            const key = document.getElementById('reg-key').value;
+            const pass = document.getElementById('reg-pass').value;
+            if(!name || !key || !pass) return alert("Fill all fields");
+            
+            await setDoc(doc(db, "users", key), {
+                name: name.toLowerCase(), displayName: name, key, pass, photoURL: "https://cdn-icons-png.flaticon.com/512/149/149071.png"
+            });
+            alert("Registered!");
+        };
+
+        window.login = async () => {
+            const key = document.getElementById('log-key').value;
+            const pass = document.getElementById('log-pass').value;
+            const snap = await getDoc(doc(db, "users", key));
+            
+            if(snap.exists() && snap.data().pass === pass) {
+                myUser = snap.data();
+                document.getElementById('auth-screen').style.display = 'none';
+                document.getElementById('main-app').style.display = 'flex';
+                document.getElementById('my-pic-thumb').src = myUser.photoURL;
+                
+                // Initialize PeerJS
+                initPeer(myUser.key);
+                
+                loadChats();
+                listenForCallSignaling();
+            } else alert("Invalid Login");
+        };
+
+        // --- PEERJS & CALLING LOGIC ---
+        function initPeer(userId) {
+            // Using a prefix to avoid collisions on the public server
+            const peerId = "cyber_msg_" + userId;
+            peer = new Peer(peerId);
+            
+            peer.on('open', (id) => {
+                console.log('My peer ID is: ' + id);
+            });
+
+            // Handle Incoming Call
+            peer.on('call', (call) => {
+                // We wait for the user to click "Answer" in the UI before answering the WebRTC call
+                currentCall = call;
+                // The actual answering happens in answerCall()
+            });
+        }
+
+        // 1. Initiate Call
+        window.initiateCall = async (type) => {
+            if(!activePeer) return;
+            
+            // Show UI
+            document.getElementById('call-modal').style.display = 'flex';
+            document.getElementById('outgoing-actions').style.display = 'flex';
+            document.getElementById('incoming-actions').style.display = 'none';
+            document.getElementById('call-modal-name').innerText = activePeer.displayName;
+            document.getElementById('call-modal-pic').src = activePeer.photoURL;
+            document.getElementById('call-modal-status').innerText = "CALLING...";
+
+            // Signal via Firebase that a call is incoming (to trigger Ringing UI on receiver)
+            await setDoc(doc(db, "users", activePeer.key, "incomingCall", "active"), {
+                caller: myUser.displayName,
+                callerPic: myUser.photoURL,
+                callerId: myUser.key,
+                type: type
+            });
+
+            // Listen for rejection or answer via Firebase
+            const unsub = onSnapshot(doc(db, "users", activePeer.key, "incomingCall", "active"), (snap) => {
+                if(!snap.exists()) {
+                    // Call ended or rejected remotely
+                    unsub();
+                    if(!currentCall) { // If connection wasn't established
+                        document.getElementById('call-modal').style.display = 'none';
+                    }
+                }
+            });
+            
+            // Start Local Stream
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({video: true, audio: true});
+                document.getElementById('local-video').srcObject = localStream;
+                
+                // Perform the WebRTC call
+                const remotePeerId = "cyber_msg_" + activePeer.key;
+                const call = peer.call(remotePeerId, localStream);
+                handleCallStream(call);
+                currentCall = call;
+                
+            } catch(err) {
+                console.error("Failed to get local stream", err);
+                alert("Camera/Mic permission denied");
+                cancelCall();
+            }
+        };
+
+        // 2. Listen for Incoming Call Signaling (Firebase)
+        function listenForCallSignaling() {
+            onSnapshot(doc(db, "users", myUser.key, "incomingCall", "active"), (snap) => {
+                if(snap.exists()) {
+                    incomingCallMetadata = snap.data();
+                    playSound('ring');
+                    
+                    // Show UI
+                    document.getElementById('call-modal').style.display = 'flex';
+                    document.getElementById('incoming-actions').style.display = 'flex';
+                    document.getElementById('outgoing-actions').style.display = 'none';
+                    document.getElementById('call-modal-name').innerText = incomingCallMetadata.caller;
+                    document.getElementById('call-modal-pic').src = incomingCallMetadata.callerPic;
+                    document.getElementById('call-modal-status').innerText = "INCOMING VIDEO CALL";
+                } else {
+                    playSound('stop');
+                    if(!currentCall || !currentCall.open) {
+                        document.getElementById('call-modal').style.display = 'none';
+                    }
+                    incomingCallMetadata = null;
+                }
+            });
+        }
+
+        // 3. Answer Call
+        window.answerCall = async () => {
+            playSound('stop');
+            document.getElementById('call-modal').style.display = 'none';
+            document.getElementById('call-interface').style.display = 'flex';
+            
+            // Clear Firebase signal
+            await deleteDoc(doc(db, "users", myUser.key, "incomingCall", "active"));
+
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({video: true, audio: true});
+                document.getElementById('local-video').srcObject = localStream;
+
+                // Answer the pending WebRTC call
+                if (currentCall) {
+                    currentCall.answer(localStream); // Send my stream back
+                    handleCallStream(currentCall);
+                }
+            } catch(err) {
+                console.error(err);
+                endCall();
+            }
+        };
+
+        function handleCallStream(call) {
+            call.on('stream', (remoteStream) => {
+                // Show Call Interface if not already shown
+                document.getElementById('call-modal').style.display = 'none';
+                document.getElementById('call-interface').style.display = 'flex';
+                document.getElementById('remote-video').srcObject = remoteStream;
+            });
+            
+            call.on('close', () => {
+                endCall();
+            });
+            
+            call.on('error', (err) => {
+                console.error(err);
+                endCall();
+            });
+        }
+
+        window.rejectCall = async () => {
+            playSound('stop');
+            await deleteDoc(doc(db, "users", myUser.key, "incomingCall", "active"));
+            // If PeerJS connection exists, close it
+            if(currentCall) currentCall.close();
+            document.getElementById('call-modal').style.display = 'none';
+        };
+
+        window.cancelCall = async () => {
+            if(activePeer) {
+                await deleteDoc(doc(db, "users", activePeer.key, "incomingCall", "active"));
+            }
+            endCall();
+        };
+
+        window.endCall = () => {
+            if(currentCall) currentCall.close();
+            if(localStream) {
+                localStream.getTracks().forEach(track => track.stop());
+            }
+            document.getElementById('call-interface').style.display = 'none';
+            document.getElementById('call-modal').style.display = 'none';
+            currentCall = null;
+            // Ensure signal is cleared
+            if(activePeer) deleteDoc(doc(db, "users", activePeer.key, "incomingCall", "active")).catch(()=>{});
+        };
+
+        window.toggleMute = () => {
+            if(localStream) {
+                const audioTrack = localStream.getAudioTracks()[0];
+                audioTrack.enabled = !audioTrack.enabled;
+                // Visual feedback could be added here
+            }
+        };
+
+        // --- CHAT LOGIC ---
+        function loadChats() {
+            onSnapshot(collection(db, "users"), (snap) => {
+                const list = document.getElementById('chat-list');
+                list.innerHTML = "";
+                snap.forEach(d => {
+                    const u = d.data();
+                    if(u.key === myUser.key) return;
+                    const div = document.createElement('div');
+                    div.className = 'chat-item';
+                    div.innerHTML = `<img src="${u.photoURL}" class="avatar"><b>${u.displayName}</b>`;
+                    div.onclick = () => openChat(u);
+                    list.appendChild(div);
+                });
+            });
+        }
+
+        window.openChat = (u) => {
+            activePeer = u;
+            document.getElementById('chat-window').style.display = 'flex';
+            document.getElementById('chat-peer-name').innerText = u.displayName;
+            document.getElementById('chat-peer-pic').src = u.photoURL;
+            loadMessages();
+        };
+
+        window.closeChat = () => {
+            document.getElementById('chat-window').style.display = 'none';
+            activePeer = null;
+        };
+
+        window.sendMsg = async () => {
+            const txt = document.getElementById('msg-input').value;
+            if(!txt || !activePeer) return;
+            const chatId = [myUser.key, activePeer.key].sort().join("_");
+            await addDoc(collection(db, "chats", chatId, "messages"), {
+                text: txt, sender: myUser.key, time: serverTimestamp()
+            });
+            document.getElementById('msg-input').value = "";
+        };
+
+        function loadMessages() {
+            if(!activePeer) return;
+            const chatId = [myUser.key, activePeer.key].sort().join("_");
+            const q = query(collection(db, "chats", chatId, "messages"), orderBy("time", "asc"));
+            onSnapshot(q, (snap) => {
+                const area = document.getElementById('msg-display');
+                area.innerHTML = "";
+                snap.forEach(d => {
+                    const m = d.data();
+                    const div = document.createElement('div');
+                    div.className = `msg ${m.sender === myUser.key ? 'sent' : 'received'}`;
+                    div.innerText = m.text;
+                    area.appendChild(div);
+                });
+                area.scrollTop = area.scrollHeight;
+            });
+        }
+
+    </script>
+</body>
+</html>
